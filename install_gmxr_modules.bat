@@ -52,13 +52,14 @@ rem === PowerShell payload below; cmd never reaches it (exit /b above) =======
 #PS   $s=$null; try{$s=(Get-ItemProperty -Path $k -ErrorAction Stop).SteamPath}catch{}
 #PS   if(-not $s){continue}
 #PS   $s=$s -replace '/','\'; $libs=@($s)
-#PS   $vdf=Join-Path $s 'steamapps\libraryfolders.vdf'
+#PS   $vdf="$s\steamapps\libraryfolders.vdf"
 #PS   if(Test-Path $vdf){foreach($m in [regex]::Matches((Get-Content -Raw $vdf),'"(?:path|\d+)"\s+"([^"]+)"')){$libs+=($m.Groups[1].Value -replace '\\\\','\')}}
-#PS   foreach($l in $libs){[void]$cand.Add((Join-Path $l 'steamapps\common\GarrysMod'))}
+#PS   foreach($l in $libs){[void]$cand.Add($l.TrimEnd('\')+'\steamapps\common\GarrysMod')}
 #PS }
 #PS $gm=$null
 #PS foreach($c in $cand){
-#PS   if([string]::IsNullOrWhiteSpace($c)){continue}
+#PS   # libraryfolders.vdf can list libraries on drives that are unplugged - skip those
+#PS   if([string]::IsNullOrWhiteSpace($c) -or -not (Test-Path -LiteralPath $c)){continue}
 #PS   if(Test-Path (Join-Path $c 'garrysmod\lua')){$gm=(Resolve-Path $c).Path;break}
 #PS   if((Split-Path $c -Leaf) -eq 'garrysmod' -and (Test-Path (Join-Path $c 'lua'))){$gm=(Resolve-Path (Split-Path $c -Parent)).Path;break}
 #PS }
