@@ -1,0 +1,516 @@
+--[[
+    cl_input.lua
+    OpenXR Action Set & Binding Definitions
+    Rewritten for Linux/DXVK/WiVRn compatibility
+]]
+
+if SERVER then return end
+
+g_VR = g_VR or {}
+vrmod = vrmod or {}
+g_VR.input = g_VR.input or {}
+g_VR.input.vector2_walkdirection = g_VR.input.vector2_walkdirection or { x = 0, y = 0 }
+g_VR.input.vector2_smoothturn = g_VR.input.vector2_smoothturn or { x = 0, y = 0 }
+g_VR.input.vector2_steer = g_VR.input.vector2_steer or { x = 0, y = 0 }
+g_VR.input.vector1_primaryfire = g_VR.input.vector1_primaryfire or 0
+g_VR.input.vector1_secondaryfire = g_VR.input.vector1_secondaryfire or 0
+g_VR.input.vector1_left_squeeze = g_VR.input.vector1_left_squeeze or 0
+g_VR.input.vector1_right_squeeze = g_VR.input.vector1_right_squeeze or 0
+g_VR.input.vector1_forward = g_VR.input.vector1_forward or 0
+g_VR.input.vector1_reverse = g_VR.input.vector1_reverse or 0
+
+-- Radial stick deadzone. Run at the source by the VRMOD_GetActions wrapper in
+-- cl_aimsteer (before aim steering writes steer.x), so every consumer -- smooth
+-- turn, locomotion, Glide, networking -- reads filtered sticks. Inside the
+-- radius reads 0; the rest is rescaled to 0..1 so there is no jump at the edge.
+local cvDzL = CreateClientConVar("vrmod_stick_deadzone_left", "0.1", true, false, "Left stick (walk/steer) deadzone radius", 0, 0.9)
+local cvDzR = CreateClientConVar("vrmod_stick_deadzone_right", "0.1", true, false, "Right stick (turn) deadzone radius", 0, 0.9)
+local dzL, dzL2, invL, dzR, dzR2, invR
+local function RefreshDz()
+    dzL, dzR = cvDzL:GetFloat(), cvDzR:GetFloat()
+    dzL2, invL, dzR2, invR = dzL * dzL, 1 / (1 - dzL), dzR * dzR, 1 / (1 - dzR)
+end
+RefreshDz()
+cvars.AddChangeCallback("vrmod_stick_deadzone_left", RefreshDz, "vrmod_dz")
+cvars.AddChangeCallback("vrmod_stick_deadzone_right", RefreshDz, "vrmod_dz")
+
+local sqrt = math.sqrt
+local function Dz(v, dz, dz2, inv)
+    if not v then return end
+    local x, y = v.x, v.y
+    local m = x * x + y * y
+    if m <= dz2 then v.x, v.y = 0, 0 return end
+    m = sqrt(m)
+    local k = (m - dz) * inv
+    k = (k < 1 and k or 1) / m
+    v.x, v.y = x * k, y * k
+end
+
+function vrmod.StickDeadzone(inp)
+    if dzL > 0 then
+        Dz(inp.vector2_walkdirection, dzL, dzL2, invL)
+        Dz(inp.vector2_steer, dzL, dzL2, invL)
+        Dz(inp.analog_left, dzL, dzL2, invL)
+    end
+    if dzR > 0 then
+        Dz(inp.vector2_smoothturn, dzR, dzR2, invR)
+        Dz(inp.analog_right, dzR, dzR2, invR)
+    end
+end
+
+local ALL_ACTIONS = {
+    -- Poses
+    pose_lefthand              = { type = "pose",     localizedActionName = "Left Hand Pose" },
+    pose_righthand             = { type = "pose",     localizedActionName = "Right Hand Pose" },
+    -- Tracker poses are generated from TRACKER_ROLES below.
+
+    -- Booleans
+    boolean_primaryfire        = { type = "boolean",  localizedActionName = "Primary Fire" },
+    boolean_secondaryfire      = { type = "boolean",  localizedActionName = "Secondary Fire" },
+    boolean_left_pickup        = { type = "boolean",  localizedActionName = "Left Pickup" },
+    boolean_right_pickup       = { type = "boolean",  localizedActionName = "Right Pickup" },
+    boolean_jump               = { type = "boolean",  localizedActionName = "Jump" },
+    boolean_crouch             = { type = "boolean",  localizedActionName = "Crouch" },
+    boolean_spawnmenu          = { type = "boolean",  localizedActionName = "Spawn Menu" },
+    boolean_use                = { type = "boolean",  localizedActionName = "Use" },
+    boolean_reload             = { type = "boolean",  localizedActionName = "Reload" },
+    boolean_undo               = { type = "boolean",  localizedActionName = "Undo" },
+    boolean_chat               = { type = "boolean",  localizedActionName = "Chat" },
+    boolean_changeweapon       = { type = "boolean",  localizedActionName = "Change Weapon" },
+    boolean_teleport           = { type = "boolean",  localizedActionName = "Teleport" },
+    boolean_sprint             = { type = "boolean",  localizedActionName = "Sprint" },
+    boolean_flashlight         = { type = "boolean",  localizedActionName = "Flashlight" },
+    boolean_menucontext        = { type = "boolean",  localizedActionName = "Context Menu" },
+    boolean_noclip             = { type = "boolean",  localizedActionName = "Noclip" },
+    boolean_turbo              = { type = "boolean",  localizedActionName = "Turbo" },
+    boolean_handbrake          = { type = "boolean",  localizedActionName = "Handbrake" },
+    boolean_exit               = { type = "boolean",  localizedActionName = "Exit Vehicle" },
+    boolean_turret             = { type = "boolean",  localizedActionName = "Turret" },
+    boolean_horn               = { type = "boolean",  localizedActionName = "Horn" },
+    boolean_lights             = { type = "boolean",  localizedActionName = "Lights" },
+    boolean_alt_turret         = { type = "boolean",  localizedActionName = "Alt Turret" },
+    boolean_switch_weapon      = { type = "boolean",  localizedActionName = "Switch Weapon" },
+    boolean_siren              = { type = "boolean",  localizedActionName = "Siren" },
+    boolean_signal_left        = { type = "boolean",  localizedActionName = "Signal Left" },
+    boolean_signal_right       = { type = "boolean",  localizedActionName = "Signal Right" },
+    boolean_toggle_engine      = { type = "boolean",  localizedActionName = "Toggle Engine" },
+    boolean_detach_trailer     = { type = "boolean",  localizedActionName = "Detach Trailer" },
+    boolean_shift_up           = { type = "boolean",  localizedActionName = "Shift Up" },
+    boolean_shift_down         = { type = "boolean",  localizedActionName = "Shift Down" },
+    boolean_shift_neutral      = { type = "boolean",  localizedActionName = "Shift Neutral" },
+    lweaponmenu                = { type = "boolean",  localizedActionName = "Left Weapon Menu" },
+    dummy                      = { type = "boolean",  localizedActionName = "Dummy" },
+    boolean_left_fire          = { type = "boolean",  localizedActionName = "Left Fire" },
+    boolean_right_fire         = { type = "boolean",  localizedActionName = "Right Fire" },
+    boolean_walk               = { type = "boolean",  localizedActionName = "Walk" },
+    boolean_turnleft           = { type = "boolean",  localizedActionName = "Turn Left" },
+    boolean_turnright          = { type = "boolean",  localizedActionName = "Turn Right" },
+    boolean_left_thumb_touch   = { type = "boolean",  localizedActionName = "Left Thumb Touch" },
+    boolean_right_thumb_touch  = { type = "boolean",  localizedActionName = "Right Thumb Touch" },
+
+    -- Floats
+    vector1_primaryfire        = { type = "float",    localizedActionName = "Primary Fire Analog" },
+    vector1_secondaryfire      = { type = "float",    localizedActionName = "Secondary Fire Analog" },
+    vector1_left_squeeze       = { type = "float",    localizedActionName = "Left Squeeze Axis" },
+    vector1_right_squeeze      = { type = "float",    localizedActionName = "Right Squeeze Axis" },
+    vector1_forward            = { type = "float",    localizedActionName = "Forward" },
+    vector1_reverse            = { type = "float",    localizedActionName = "Reverse" },
+    trigger_left_axis          = { type = "float",    localizedActionName = "Left Trigger Axis" },
+    trigger_right_axis         = { type = "float",    localizedActionName = "Right Trigger Axis" },
+
+    -- Vectors
+    vector2_walkdirection      = { type = "vector2f", localizedActionName = "Walk Direction" },
+    vector2_smoothturn         = { type = "vector2f", localizedActionName = "Smooth Turn" },
+    vector2_steer              = { type = "vector2f", localizedActionName = "Steer" },
+    analog_left                = { type = "vector2f", localizedActionName = "Left Analog Stick" },
+    analog_right               = { type = "vector2f", localizedActionName = "Right Analog Stick" },
+
+    -- Haptics (vibration = XR_ACTION_TYPE_VIBRATION_OUTPUT in the module)
+    vibration_left             = { type = "vibration", localizedActionName = "Left Haptic" },
+    vibration_right            = { type = "vibration", localizedActionName = "Right Haptic" },
+}
+
+-- Oculus Touch / Meta Quest controllers
+-- Mirrors the saved SteamVR/OpenXR Touch action manifest. Path fragments are
+-- hoisted so every shared physical input is written once -- five actions ride
+-- the right trigger, three the left stick click -- which makes the overlaps
+-- visible instead of hiding them in 30+ near-identical string literals.
+local OCULUS_TOUCH
+do
+    local L, R   = "/user/hand/left/input/", "/user/hand/right/input/"
+    local LT, RT = L .. "trigger/value", R .. "trigger/value"
+    local LG, RG = L .. "squeeze/value", R .. "squeeze/value"
+    local LJ, RJ = L .. "thumbstick", R .. "thumbstick"
+    local LJC = LJ .. "/click"
+
+    OCULUS_TOUCH = {
+        profile = "/interaction_profiles/oculus/touch_controller",
+        bindings = {
+            pose_lefthand              = L .. "grip/pose",
+            pose_righthand             = R .. "grip/pose",
+
+            -- Right trigger: primary fire + vehicle throttle
+            boolean_primaryfire        = RT,
+            boolean_right_fire         = RT,
+            vector1_primaryfire        = RT,
+            vector1_forward            = RT,
+            trigger_right_axis         = RT,
+
+            -- Left trigger: secondary fire + vehicle reverse/brake
+            boolean_secondaryfire      = LT,
+            boolean_left_fire          = LT,
+            vector1_secondaryfire      = LT,
+            vector1_reverse            = LT,
+            trigger_left_axis          = LT,
+
+            -- Grips: pickup on both hands, +use on the right
+            boolean_left_pickup        = LG,
+            vector1_left_squeeze       = LG,
+            boolean_right_pickup       = RG,
+            vector1_right_squeeze      = RG,
+            boolean_use                = RG,
+
+            -- Face buttons
+            boolean_spawnmenu          = L .. "x/click",
+            boolean_flashlight         = L .. "y/click",
+            boolean_jump               = R .. "a/click",
+            boolean_reload             = R .. "b/click",
+
+            -- Sticks
+            vector2_walkdirection      = LJ,
+            vector2_steer              = LJ,
+            analog_left                = LJ,
+            vector2_smoothturn         = RJ,
+            boolean_walk               = LJC,
+            boolean_sprint             = LJC,
+            boolean_handbrake          = LJC,
+            boolean_changeweapon       = RJ .. "/click",
+            boolean_left_thumb_touch   = LJ .. "/touch",
+            boolean_right_thumb_touch  = RJ .. "/touch",
+
+            -- Haptics: absent from the manifest, required by the module
+            vibration_left             = "/user/hand/left/output/haptic",
+            vibration_right            = "/user/hand/right/output/haptic",
+        },
+    }
+end
+
+-- Valve Index (Knuckles) Controllers
+-- Mirrors the saved SteamVR/OpenXR Knuckles action manifest. Same hoisting as
+-- the Touch block: shared physical inputs are written once, so the overlaps
+-- (five actions on the right trigger, two on each trackpad) stay visible.
+local VALVE_INDEX
+do
+    local L, R     = "/user/hand/left/input/", "/user/hand/right/input/"
+    local LT, RT   = L .. "trigger/value", R .. "trigger/value"
+    local LTC, RTC = L .. "trigger/click", R .. "trigger/click"
+    local LJ, RJ   = L .. "thumbstick", R .. "thumbstick"
+
+    VALVE_INDEX = {
+        profile = "/interaction_profiles/valve/index_controller",
+        bindings = {
+            pose_lefthand              = L .. "grip/pose",
+            pose_righthand             = R .. "grip/pose",
+
+            -- Right trigger: primary fire + vehicle throttle
+            boolean_primaryfire        = RTC,
+            boolean_right_fire         = RTC,
+            vector1_primaryfire        = RT,
+            vector1_forward            = RT,
+            trigger_right_axis         = RT,
+
+            -- Left trigger: secondary fire + vehicle reverse/brake
+            boolean_secondaryfire      = LTC,
+            boolean_left_fire          = LTC,
+            vector1_secondaryfire      = LT,
+            vector1_reverse            = LT,
+            trigger_left_axis          = LT,
+
+            -- Grips: force sensor clicks pickup, capacitive axis drives squeeze
+            boolean_left_pickup        = L .. "squeeze/force",
+            boolean_right_pickup       = R .. "squeeze/force",
+            vector1_left_squeeze       = L .. "squeeze/value",
+            vector1_right_squeeze      = R .. "squeeze/value",
+
+            -- Face buttons
+            boolean_use                = L .. "a/click",
+            boolean_spawnmenu          = L .. "b/click",
+            boolean_crouch             = R .. "a/click",
+            boolean_jump               = R .. "b/click",
+
+            -- Trackpads: index_controller has no trackpad/click (one bad path
+            -- rejects the whole profile); the runtime thresholds force instead
+            boolean_reload             = L .. "trackpad/force",
+            lweaponmenu                = R .. "trackpad/force",
+
+            -- Sticks
+            vector2_walkdirection      = LJ,
+            vector2_steer              = LJ,
+            analog_left                = LJ,
+            vector2_smoothturn         = RJ,
+            analog_right               = RJ,
+            boolean_sprint             = LJ .. "/click",
+            boolean_flashlight         = RJ .. "/click",
+            boolean_left_thumb_touch   = LJ .. "/touch",
+            boolean_right_thumb_touch  = RJ .. "/touch",
+
+            -- Haptics: absent from the manifest, required by the module
+            vibration_left             = "/user/hand/left/output/haptic",
+            vibration_right            = "/user/hand/right/output/haptic",
+        },
+    }
+end
+
+-- Steam Frame controllers (XR_VALVE_frame_controller_interaction)
+-- Mirrors the saved SteamVR Frame binding. Each shoulder bumper doubles its
+-- trigger, so those actions carry two paths: booleans OR, floats take the larger
+-- value, and a bumper press reads as 1.0 on the analog actions. Pickup rides
+-- the grip axis (runtime threshold); +use sits on both grips' end-of-travel
+-- clicks, so it only fires once a grip is bottomed out.
+local FRAME_CONTROLLER
+do
+    local L, R   = "/user/hand/left/input/", "/user/hand/right/input/"
+    local LT     = { L .. "trigger/value", L .. "bumper/click" }
+    local RT     = { R .. "trigger/value", R .. "bumper/click" }
+    local LTC    = { L .. "trigger/click", L .. "bumper/click" }
+    local RTC    = { R .. "trigger/click", R .. "bumper/click" }
+    local LG, RG = L .. "squeeze/value", R .. "squeeze/value"
+    local LJ, RJ = L .. "thumbstick", R .. "thumbstick"
+    local LJC = LJ .. "/click"
+
+    FRAME_CONTROLLER = {
+        profile = "/interaction_profiles/valve/frame_controller_valve",
+        bindings = {
+            pose_lefthand              = L .. "grip/pose",
+            pose_righthand             = R .. "grip/pose",
+
+            -- Right trigger + bumper: primary fire + vehicle throttle
+            boolean_primaryfire        = RTC,
+            boolean_right_fire         = RTC,
+            vector1_primaryfire        = RT,
+            vector1_forward            = RT,
+            trigger_right_axis         = RT,
+
+            -- Left trigger + bumper: secondary fire + vehicle reverse/brake
+            boolean_secondaryfire      = LTC,
+            boolean_left_fire          = LTC,
+            vector1_secondaryfire      = LT,
+            vector1_reverse            = LT,
+            trigger_left_axis          = LT,
+
+            -- Grips: partial squeeze picks up, full click on either hand is +use
+            boolean_left_pickup        = LG,
+            vector1_left_squeeze       = LG,
+            boolean_right_pickup       = RG,
+            vector1_right_squeeze      = RG,
+            boolean_use                = { L .. "squeeze/click", R .. "squeeze/click" },
+
+            -- Left d-pad + View
+            boolean_noclip             = L .. "dpad_up/click",
+            boolean_spawnmenu          = L .. "dpad_down/click",
+            boolean_menucontext        = L .. "view/click",
+
+            -- Right face diamond
+            boolean_jump               = R .. "a/click",
+            boolean_reload             = R .. "b/click",
+            boolean_crouch             = R .. "x/click",
+            boolean_flashlight         = R .. "y/click",
+            boolean_undo               = R .. "menu/click",
+
+            -- Sticks
+            vector2_walkdirection      = LJ,
+            vector2_steer              = LJ,
+            analog_left                = LJ,
+            vector2_smoothturn         = RJ,
+            boolean_walk               = LJC,
+            boolean_sprint             = LJC,
+            boolean_handbrake          = LJC,
+            boolean_changeweapon       = RJ .. "/click",
+            boolean_left_thumb_touch   = LJ .. "/touch",
+            boolean_right_thumb_touch  = RJ .. "/touch",
+
+            vibration_left             = "/user/hand/left/output/haptic",
+            vibration_right            = "/user/hand/right/output/haptic",
+        },
+    }
+end
+
+-- HTCX Vive Tracker — pose-only, no buttons.
+--
+-- Every role the extension defines, not just the three FBT ones. Actions cannot
+-- be created after xrAttachSessionActionSets, so anything we might ever want a
+-- tracker on has to be declared here up front; there is no discover-then-bind.
+-- Unconnected roles simply never go active and never appear in the pose table.
+--
+-- The first three names are kept for compatibility with existing calibration
+-- data and the sh_character_fbt.lua reads. /role/camera is the one to assign in
+-- SteamVR for a physical camera rig.
+--
+-- Runtime notes, from SteamVR's OpenXR behaviour:
+--  * xrGetCurrentInteractionProfile on a role path is unreliable -- it reports
+--    the profile as bound even with the tracker switched off. The module keys
+--    off xrGetActionStatePose().isActive instead, which is correct.
+--  * Per-role bindings set in SteamVR's own binding UI override these and will
+--    break them. Clear them there if a role refuses to go active.
+--  * handheld_object was broken in SteamVR for longer than the others; treat it
+--    as the least reliable of the set.
+-- Fourth column: the tier a role is suggested in. 1 = the three FBT roles,
+-- 2 = the rest of the extension's original (revision 1) role set, 3 = the
+-- wrist and ankle roles revision 3 added.
+--
+-- The tiers exist because of how SteamVR validates the suggestion. Every path
+-- for a profile goes into ONE xrSuggestInteractionProfileBindings call, and
+-- the runtime rejects the whole call (XR_ERROR_PATH_UNSUPPORTED) on the first
+-- path it does not recognise -- one unknown role silently unbinds the waist
+-- and both feet with it. SteamVR advertised revision 3 but rejected its wrist
+-- paths until late 2024 (ValveSoftware/openvr#1769), and a regression of the
+-- same shape can ship in any runtime update. Tier 3 is therefore opt-in via
+-- vrmod_trackers_htcx_rev3, and SuggestTrackerBindings steps down a tier
+-- whenever the module reports the call failed.
+local TRACKER_ROLES = {
+    { "pose_waist",      "waist",           "Waist", 1 },
+    { "pose_leftfoot",   "left_foot",       "Left Foot", 1 },
+    { "pose_rightfoot",  "right_foot",      "Right Foot", 1 },
+    { "pose_chest",      "chest",           "Chest", 2 },
+    { "pose_leftknee",   "left_knee",       "Left Knee", 2 },
+    { "pose_rightknee",  "right_knee",      "Right Knee", 2 },
+    { "pose_leftelbow",  "left_elbow",      "Left Elbow", 2 },
+    { "pose_rightelbow", "right_elbow",     "Right Elbow", 2 },
+    { "pose_leftshldr",  "left_shoulder",   "Left Shoulder", 2 },
+    { "pose_rightshldr", "right_shoulder",  "Right Shoulder", 2 },
+    { "pose_leftwrist",  "left_wrist",      "Left Wrist", 3 },
+    { "pose_rightwrist", "right_wrist",     "Right Wrist", 3 },
+    { "pose_leftankle",  "left_ankle",      "Left Ankle", 3 },
+    { "pose_rightankle", "right_ankle",     "Right Ankle", 3 },
+    { "pose_camera",     "camera",          "Camera", 2 },
+    { "pose_keyboard",   "keyboard",        "Keyboard", 2 },
+    { "pose_handheld",   "handheld_object", "Handheld Object", 2 },
+}
+
+local TRACKER_PATHS, TRACKER_TIER = {}, {}
+local VIVE_TRACKER_HTCX = {
+    profile = "/interaction_profiles/htc/vive_tracker_htcx",
+    bindings = {},
+}
+
+for i = 1, #TRACKER_ROLES do
+    local r = TRACKER_ROLES[i]
+    local path = "/user/vive_tracker_htcx/role/" .. r[2] .. "/input/grip/pose"
+    ALL_ACTIONS[r[1]] = { type = "pose", localizedActionName = r[3] .. " Pose" }
+    VIVE_TRACKER_HTCX.bindings[r[1]] = path
+    TRACKER_PATHS[i] = path
+    TRACKER_TIER[r[1]] = r[4]
+end
+
+--- Action name + role name pairs, for the tracker registry and the menu.
+function vrmod.GetTrackerRoleActions() return TRACKER_ROLES end
+
+--- Bindable paths, for the XR bindings editor's tracker tab.
+function vrmod.GetTrackerRolePaths() return TRACKER_PATHS end
+
+-- Wrist/ankle roles (extension revision 3). Off by default; see TRACKER_ROLES.
+local cv_htcxRev3 = CreateClientConVar("vrmod_trackers_htcx_rev3", "0", true, false,
+    "Also bind the wrist and ankle Vive tracker roles. Needs SteamVR 2.8+; older runtimes reject the whole tracker profile", 0, 1)
+
+--- Suggests the HTCX profile largest tier first and steps down on failure. A
+--- rejected call stores nothing and a successful one replaces whatever the
+--- profile had before, so walking down is safe. The module's return counts
+--- as failure only when it says so (false, or a non-zero XrResult); a build
+--- that returns nothing makes the first call the only call, which is why the
+--- default tier has to stand on its own and tier 3 is opt-in.
+---
+--- An action the role table does not know about can only have come from a
+--- binding override, so it rides along in tiers 2 and 3 rather than being
+--- dropped -- but never in tier 1, which is the last resort and carries
+--- nothing but the three paths every revision of the extension defines.
+local function SuggestTrackerBindings(bindings)
+    for tier = cv_htcxRev3:GetBool() and 3 or 2, 1, -1 do
+        local sub, n = {}, 0
+        for k, v in pairs(bindings) do
+            local t = TRACKER_TIER[k] or (tier > 1 and tier or nil)
+            if t and t <= tier then sub[k] = v; n = n + 1 end
+        end
+        if n == 0 then return end
+        local r = VRMOD_SuggestBindings(VIVE_TRACKER_HTCX.profile, sub)
+        if r == nil or r == true or r == 0 then return tier end
+        vrmod.logger.Warn("[Trackers] HTCX binding tier " .. tier .. " rejected by the runtime ("
+            .. tostring(r) .. "), retrying with fewer roles")
+    end
+end
+
+local ALL_PROFILES = { OCULUS_TOUCH, VALVE_INDEX }
+
+function vrmod.SetupXRActions()
+    VRMOD_CreateActionSet("base", "VRMod Controls", ALL_ACTIONS)
+    -- Build profile list; append tracker profile when runtime has HTCX extension
+    -- (append, not overwrite — controller bindings must survive alongside trackers)
+    local profiles = { OCULUS_TOUCH, VALVE_INDEX }
+    -- Steam Frame only once the module has enabled its extension: without it the
+    -- profile path is unsupported, and older modules can't take multi-path values.
+    if vrmod.HasFrameControllerSupport and vrmod.HasFrameControllerSupport() then
+        profiles[#profiles + 1] = FRAME_CONTROLLER
+    end
+    if vrmod.HasTrackerSupport and vrmod.HasTrackerSupport() then
+        profiles[#profiles + 1] = VIVE_TRACKER_HTCX
+    end
+    -- Merge user binding overrides from the XR bindings editor
+    local allOverrides = vrmod.LoadAllBindingOverrides and vrmod.LoadAllBindingOverrides() or {}
+    for _, prof in ipairs(profiles) do
+        local bindings, ov = prof.bindings, allOverrides[prof.profile]
+        if ov then
+            bindings = {}
+            -- A binding cleared to "(unbound)" in the editor is saved as "",
+            -- which is truthy in Lua: `ov[k] or v` let it win over the default
+            -- instead of falling back to it. That matters more than one dead
+            -- action, because an empty path fails xrSuggestInteractionProfileBindings
+            -- for the ENTIRE profile -- every binding in the call dies with it.
+            for k, v in pairs(prof.bindings) do
+                local o = ov[k]
+                bindings[k] = (o and o ~= "") and o or v
+            end
+            for k, v in pairs(ov) do
+                if v ~= "" and not bindings[k] then bindings[k] = v end
+            end
+        end
+        if prof == VIVE_TRACKER_HTCX then
+            SuggestTrackerBindings(bindings)
+        else
+            local r = VRMOD_SuggestBindings(prof.profile, bindings)
+            if r ~= nil and r ~= true and r ~= 0 then
+                vrmod.logger.Warn("[Input] " .. prof.profile .. " bindings rejected (" .. tostring(r) .. ")")
+            end
+        end
+    end
+    VRMOD_SetActiveActionSets("base")
+    VRMOD_AttachActionSets()
+
+    for actionName, def in pairs(ALL_ACTIONS) do
+        if def.type == "boolean" then
+            g_VR.input[actionName] = g_VR.input[actionName] or false
+        elseif def.type == "float" then
+            g_VR.input[actionName] = g_VR.input[actionName] or 0
+        elseif def.type == "vector2f" then
+            g_VR.input[actionName] = g_VR.input[actionName] or { x = 0, y = 0 }
+        end
+    end
+    g_VR.input.skeleton_lefthand = { fingerCurls = {0, 0, 0, 0, 0} }
+    g_VR.input.skeleton_righthand = { fingerCurls = {0, 0, 0, 0, 0} }
+end
+
+function vrmod.GetAllActions()
+    return ALL_ACTIONS
+end
+
+function vrmod.GetDefaultProfiles()
+    local out = {}
+    for _, prof in ipairs(ALL_PROFILES) do
+        out[prof.profile] = { bindings = table.Copy(prof.bindings) }
+    end
+    if vrmod.HasFrameControllerSupport and vrmod.HasFrameControllerSupport() then
+        out[FRAME_CONTROLLER.profile] = { bindings = table.Copy(FRAME_CONTROLLER.bindings) }
+    end
+    if vrmod.HasTrackerSupport and vrmod.HasTrackerSupport() then
+        out[VIVE_TRACKER_HTCX.profile] = { bindings = table.Copy(VIVE_TRACKER_HTCX.bindings) }
+    end
+    return out
+end
