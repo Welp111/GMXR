@@ -30,3 +30,5 @@ To Install, download the workshop addon, and run the .bat (if windows) or the .s
 * and a more detailed API.
 
 The license here is do whatever you want. just lend credit to my name, and don't just copy and paste the code in your favorite slop bot.
+Actually, I can't even control that!
+I do ask for credit atleast, das it.
