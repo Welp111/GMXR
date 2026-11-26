@@ -4,10 +4,13 @@ First time writing one of these, bear with me.
 
 This repo is a overhauled ver of (g)VRmod *before April 4*. (aka, the license doesn't apply, it also doesn't apply as you ***can't license code published to the workshop***, which in itself is a fork of VRmod by Catse, taking code from VRmod Semi-Unofficial by Prescorr and XRmod by Wheatly126. 
 
+To Install, download the workshop addon, and run the .bat (if windows) or the .sh (if Linux)
+
 * ### The main benefits of this over other VRmod Branches are:
 
 * OpenXR Rendering (Done on gVRmod for Linux only, XRmod aswell)
-* Multicore rendering (XRmod aswell)
+* Multicore rendering (XRmod aswell)|
+* Linux and Windows Support
 * Dual Weilding
 * Left Handed Support (Kind of in Semi-Unofficial, but broken)
 * HAI-IK Implementation
